@@ -1,19 +1,23 @@
 variable "k8s_version" {
-  default = "1.25"
+  description = "Kubernetes version for the EKS cluster and managed nodes."
+  type        = string
+  default     = "1.35"
 }
 
 variable "enable_private" {
-  default = false
+  description = "Keep false for the public EKS endpoint and public worker subnet."
+  type        = bool
+  default     = false
 }
 
 variable "public_az" {
+  description = "Availability Zone suffix for the public subnet in us-east-1."
   type        = string
-  description = "Change this to a letter a-f only if you encounter an error during setup"
   default     = "a"
 }
 
 variable "private_az" {
+  description = "Availability Zone suffix for the private subnet."
   type        = string
-  description = "Change this to a letter a-f only if you encounter an error during setup"
   default     = "b"
 }

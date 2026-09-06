@@ -1,33 +1,38 @@
-####################
+#####################
 # VPC Configuration
-####################
-# Create a VPC
+#####################
+
 resource "aws_vpc" "vpc" {
-  tags = {
-    "Name" = "udacity"
-  }
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
+
+  tags = {
+    Name = "udacity"
+  }
 }
 
-# Create an internet gateway
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.vpc.id
 }
 
-# Create a public subnet
+#####################
+# Public Subnet
+#####################
+
 resource "aws_subnet" "public_subnet" {
   vpc_id                  = aws_vpc.vpc.id
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "us-east-1${var.public_az}"
   map_public_ip_on_launch = true
+
   tags = {
-    Name = "udacity-public"
+    Name                            = "udacity-public"
+    "kubernetes.io/role/elb"        = "1"
+    "kubernetes.io/cluster/cluster" = "shared"
   }
 }
 
-# Create public route table
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.vpc.id
 
@@ -41,23 +46,27 @@ resource "aws_route_table" "public" {
   }
 }
 
-# Associate the route table
 resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public_subnet.id
   route_table_id = aws_route_table.public.id
 }
 
-# Create a private subnet
+#####################
+# Private Subnet
+#####################
+
 resource "aws_subnet" "private_subnet" {
   vpc_id            = aws_vpc.vpc.id
-  availability_zone = "us-east-1${var.private_az}"
   cidr_block        = "10.0.2.0/24"
+  availability_zone = "us-east-1${var.private_az}"
+
   tags = {
-    Name = "udacity-private"
+    Name                              = "udacity-private"
+    "kubernetes.io/role/internal-elb" = "1"
+    "kubernetes.io/cluster/cluster"   = "shared"
   }
 }
 
-# Create private route table
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.vpc.id
 
@@ -66,56 +75,63 @@ resource "aws_route_table" "private" {
   }
 }
 
-# Associate private route table
 resource "aws_route_table_association" "private" {
   subnet_id      = aws_subnet.private_subnet.id
   route_table_id = aws_route_table.private.id
 }
 
-# Create EKS endpoint for private access
+#####################
+# Optional Endpoints
+#####################
+
 resource "aws_vpc_endpoint" "eks" {
-  count               = var.enable_private == true ? 1 : 0 # only enable when private
+  count = var.enable_private ? 1 : 0
+
   vpc_id              = aws_vpc.vpc.id
   service_name        = "com.amazonaws.us-east-1.eks"
   vpc_endpoint_type   = "Interface"
-  security_group_ids  = [aws_eks_cluster.main.vpc_config.0.cluster_security_group_id]
+  security_group_ids  = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
   subnet_ids          = [aws_subnet.private_subnet.id]
   private_dns_enabled = true
 }
 
-# Create EC2 endpoint for private access
 resource "aws_vpc_endpoint" "ec2" {
-  count               = var.enable_private == true ? 1 : 0
+  count = var.enable_private ? 1 : 0
+
   vpc_id              = aws_vpc.vpc.id
   service_name        = "com.amazonaws.us-east-1.ec2"
   vpc_endpoint_type   = "Interface"
-  security_group_ids  = [aws_eks_cluster.main.vpc_config.0.cluster_security_group_id]
+  security_group_ids  = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
+  subnet_ids          = [aws_subnet.private_subnet.id]
   private_dns_enabled = true
 }
 
 resource "aws_vpc_endpoint" "ecr-dkr-endpoint" {
-  count               = var.enable_private == true ? 1 : 0
+  count = var.enable_private ? 1 : 0
+
   vpc_id              = aws_vpc.vpc.id
   service_name        = "com.amazonaws.us-east-1.ecr.dkr"
   vpc_endpoint_type   = "Interface"
-  security_group_ids  = [aws_eks_cluster.main.vpc_config.0.cluster_security_group_id]
+  security_group_ids  = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
   subnet_ids          = [aws_subnet.private_subnet.id]
   private_dns_enabled = true
 }
 
 resource "aws_vpc_endpoint" "ecr-api-endpoint" {
-  count               = var.enable_private == true ? 1 : 0
+  count = var.enable_private ? 1 : 0
+
   vpc_id              = aws_vpc.vpc.id
   service_name        = "com.amazonaws.us-east-1.ecr.api"
   vpc_endpoint_type   = "Interface"
-  security_group_ids  = [aws_eks_cluster.main.vpc_config.0.cluster_security_group_id]
+  security_group_ids  = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
   subnet_ids          = [aws_subnet.private_subnet.id]
   private_dns_enabled = true
 }
 
-###################
+#####################
 # ECR Repositories
-###################
+#####################
+
 resource "aws_ecr_repository" "frontend" {
   name                 = "frontend"
   image_tag_mutability = "MUTABLE"
@@ -136,24 +152,10 @@ resource "aws_ecr_repository" "backend" {
   }
 }
 
-################
-# EKS Resources
-################
-# Create an EKS cluster
-resource "aws_eks_cluster" "main" {
-  name     = "cluster"
-  version  = var.k8s_version
-  role_arn = aws_iam_role.eks_cluster.arn
-  vpc_config {
-    subnet_ids              = [aws_subnet.private_subnet.id, aws_subnet.public_subnet.id]
-    endpoint_public_access  = var.enable_private == true ? false : true
-    endpoint_private_access = true
-  }
-  depends_on = [aws_iam_role_policy_attachment.eks_cluster, aws_iam_role_policy_attachment.eks_service]
-}
+#####################
+# EKS Cluster IAM
+#####################
 
-
-# Create an IAM role for the EKS cluster
 resource "aws_iam_role" "eks_cluster" {
   name = "eks_cluster_role"
 
@@ -161,8 +163,8 @@ resource "aws_iam_role" "eks_cluster" {
     Version = "2012-10-17"
     Statement = [
       {
-        Action = "sts:AssumeRole"
         Effect = "Allow"
+        Action = "sts:AssumeRole"
         Principal = {
           Service = "eks.amazonaws.com"
         }
@@ -171,56 +173,62 @@ resource "aws_iam_role" "eks_cluster" {
   })
 }
 
-# Attach policies to the EKS cluster IAM role
 resource "aws_iam_role_policy_attachment" "eks_cluster" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
   role       = aws_iam_role.eks_cluster.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
 resource "aws_iam_role_policy_attachment" "eks_service" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSServicePolicy"
   role       = aws_iam_role.eks_cluster.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSServicePolicy"
 }
 
+#####################
+# EKS Cluster
+#####################
 
-##################
-# EKS Node Group
-##################
-# Track latest release for the given k8s version
-data "aws_ssm_parameter" "eks_ami_release_version" {
-  name = "/aws/service/eks/optimized-ami/${aws_eks_cluster.main.version}/amazon-linux-2/recommended/release_version"
-}
+resource "aws_eks_cluster" "main" {
+  name     = "cluster"
+  version  = var.k8s_version
+  role_arn = aws_iam_role.eks_cluster.arn
 
-resource "aws_eks_node_group" "main" {
-  node_group_name = "udacity"
-  cluster_name    = aws_eks_cluster.main.name
-  version         = aws_eks_cluster.main.version
-  node_role_arn   = aws_iam_role.node_group.arn
-  subnet_ids      = [var.enable_private == true ? aws_subnet.private_subnet.id : aws_subnet.public_subnet.id]
-  release_version = nonsensitive(data.aws_ssm_parameter.eks_ami_release_version.value)
-  instance_types  = ["t3.small"]
-
-  scaling_config {
-    desired_size = 1
-    max_size     = 1
-    min_size     = 1
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
   }
 
+  vpc_config {
+    subnet_ids = [
+      aws_subnet.public_subnet.id,
+      aws_subnet.private_subnet.id
+    ]
 
-  # Ensure that IAM Role permissions are created before and deleted after EKS Node Group handling.
-  # Otherwise, EKS will not be able to properly delete EC2 Instances and Elastic Network Interfaces.
+    endpoint_public_access  = !var.enable_private
+    endpoint_private_access = true
+  }
+
   depends_on = [
-    aws_iam_role_policy_attachment.node_group_policy,
-    aws_iam_role_policy_attachment.cni_policy,
-    aws_iam_role_policy_attachment.ecr_policy,
+    aws_iam_role_policy_attachment.eks_cluster,
+    aws_iam_role_policy_attachment.eks_service
   ]
+}
 
-  lifecycle {
-    ignore_changes = [scaling_config.0.desired_size]
+#####################
+# Worker Node IAM
+#####################
+
+data "aws_iam_policy_document" "assume_role_policy" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
   }
 }
 
-// IAM Configuration
 resource "aws_iam_role" "node_group" {
   name               = "udacity-node-group"
   assume_role_policy = data.aws_iam_policy_document.assume_role_policy.json
@@ -241,90 +249,97 @@ resource "aws_iam_role_policy_attachment" "ecr_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-data "aws_iam_policy_document" "assume_role_policy" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
+#####################
+# EKS Managed Nodes
+#####################
+
+resource "aws_eks_node_group" "main" {
+  node_group_name = "udacity"
+  cluster_name    = aws_eks_cluster.main.name
+  version         = aws_eks_cluster.main.version
+  node_role_arn   = aws_iam_role.node_group.arn
+
+  subnet_ids = [
+    var.enable_private ? aws_subnet.private_subnet.id : aws_subnet.public_subnet.id
+  ]
+
+  ami_type       = "AL2023_x86_64_STANDARD"
+  instance_types = ["t3.small"]
+
+  scaling_config {
+    desired_size = 1
+    max_size     = 1
+    min_size     = 1
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node_group_policy,
+    aws_iam_role_policy_attachment.cni_policy,
+    aws_iam_role_policy_attachment.ecr_policy,
+    aws_route_table_association.public
+  ]
+
+  lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
   }
 }
 
-######################
-# CodeBuild Resources
-######################
-# Create a CodeBuild project
-resource "aws_codebuild_project" "codebuild" {
-  name          = "udacity"
-  description   = "Udacity CodeBuild project"
-  service_role  = aws_iam_role.codebuild.arn
-  build_timeout = 60
-  artifacts {
-    type = "NO_ARTIFACTS"
-  }
+#####################
+# GitHub Actions IAM
+#####################
 
-  environment {
-    compute_type                = "BUILD_GENERAL1_SMALL"
-    image                       = "aws/codebuild/standard:5.0"
-    type                        = "LINUX_CONTAINER"
-    image_pull_credentials_type = "CODEBUILD"
-    privileged_mode             = true
-  }
-
-  source {
-    type            = "GITHUB"
-    location        = "https://github.com/your-org/your-repo"
-    git_clone_depth = 1
-    buildspec       = "buildspec.yml"
-  }
-
-  cache {
-    type = "NO_CACHE"
-  }
-}
-
-# Create the Codebuild Role
-resource "aws_iam_role" "codebuild" {
-  name = "codebuild-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "codebuild.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-# Attach the IAM policy to the codebuild role
-resource "aws_iam_role_policy_attachment" "codebuild" {
-  policy_arn = "arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess"
-  role       = aws_iam_role.codebuild.name
-}
-
-####################
-# Github Action role
-####################
 resource "aws_iam_user" "github_action_user" {
-  name = "github-action-user"
+  name          = "github-action-user"
+  force_destroy = false
+}
+
+data "aws_iam_policy_document" "github_policy" {
+  statement {
+    sid       = "ECRAuthentication"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "ProjectRepositoryAccess"
+    effect = "Allow"
+
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+      "ecr:InitiateLayerUpload",
+      "ecr:UploadLayerPart",
+      "ecr:CompleteLayerUpload",
+      "ecr:PutImage",
+      "ecr:DescribeRepositories",
+      "ecr:DescribeImages",
+      "ecr:ListImages"
+    ]
+
+    resources = [
+      aws_ecr_repository.frontend.arn,
+      aws_ecr_repository.backend.arn
+    ]
+  }
+
+  statement {
+    sid       = "DescribeProjectCluster"
+    effect    = "Allow"
+    actions   = ["eks:DescribeCluster"]
+    resources = [aws_eks_cluster.main.arn]
+  }
+
+  statement {
+    sid       = "ReadOwnIAMUser"
+    effect    = "Allow"
+    actions   = ["iam:GetUser"]
+    resources = [aws_iam_user.github_action_user.arn]
+  }
 }
 
 resource "aws_iam_user_policy" "github_action_user_permission" {
   user   = aws_iam_user.github_action_user.name
   policy = data.aws_iam_policy_document.github_policy.json
-}
-
-data "aws_iam_policy_document" "github_policy" {
-  statement {
-    effect    = "Allow"
-    actions   = ["ecr:*", "eks:*", "ec2:*", "iam:GetUser"]
-    resources = ["*"]
-  }
 }
